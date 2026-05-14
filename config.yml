@@ -1,0 +1,102 @@
+# Hostinger Watchdog config
+# Edit thresholds and safelist freely; no redeploy required. Changes
+# are picked up on the next 30s tick.
+
+version: 1
+host: auto             # auto-detected from /etc/hostname; override if needed
+mode: alert_only       # alert_only | armed   (alert_only = Act/Protect logged but not executed)
+
+# How often the systemd timer fires us; thresholds below assume 30s.
+tick_seconds: 30
+
+# Sustained-threshold window: a signal must stay above tier threshold for N
+# consecutive ticks before that tier fires. 6 ticks * 30s = 3 min.
+sustained_ticks: 6
+
+thresholds:
+  host_cpu_pct:            # user + sys, excluding steal and idle
+    warn: 70
+    act: 80
+    protect: 88
+  host_mem_pct:
+    warn: 80
+    act: 88
+    protect: 93
+  load_avg_normalized:     # 1-min loadavg / cpu_count
+    warn: 2.0
+    act: 3.0
+    protect: 4.0
+  disk_pct:                # any watched partition; instantaneous (not sustained)
+    warn: 75
+    act: 85
+    protect: 92
+
+partitions_watched:
+  - /
+  - /opt/data
+  - /var/lib/docker
+
+# Containers that may be CAPPED (Act) but never AUTO-STOPPED (Protect).
+# Glob patterns supported via fnmatch.
+safelist:
+  # Top-level critical services
+  - helix-cortex
+  - helix-embeddings
+  - helix-mcp
+  - mcp-gateway
+  - mcp-provisioner
+  - the-forge
+  - helix-*          # all helix-* (postgres, redis, chromadb, garage, infisical-agent, etc.)
+  # Data stores & ingress (match any position in name)
+  - "*postgres*"
+  - "*redis*"
+  - "*chromadb*"
+  - "*minio*"
+  - "*mongo*"
+  - "*mariadb*"
+  - "*mysql*"
+  - "*traefik*"
+  - "*caddy*"
+  - "*coolify*"      # coolify-proxy handles ingress, never auto-stop
+  - "*infisical*"    # secrets store
+
+# Per-container threshold overrides. Useful for known-bursty jobs.
+# Example: millyext-receiver runs a 20-min CPU-heavy enrichment cron 3x/day.
+container_overrides:
+  millyext-receiver:
+    cpu_pct_warn: 90       # tolerate its scheduled burst
+    cpu_pct_act: 95
+
+cooldowns:
+  action_seconds: 900      # 15 min between Act/Protect per container
+  warn_seconds: 300        # 5 min between repeat Warns for same signal
+
+act_grace_seconds: 30      # 30s grace before Act fires, reply STOP to abort
+protect_grace_seconds: 60  # 60s grace before Protect fires, reply STOP to abort
+
+# When Act fires on a CPU/mem offender, cap it to these fractions of its
+# current usage. 0.75 = cap to 75% of what it's consuming right now.
+act_cap_cpu_ratio: 0.75
+act_cap_mem_ratio: 0.85
+
+# Absolute floor caps so we don't cap something down to nothing.
+act_cap_cpu_floor: 0.5     # never cap below 0.5 cpu
+act_cap_mem_floor_mb: 256  # never cap below 256 MB
+
+ntfy:
+  base_url: https://ntfy.sh
+  topic: "millyweb-watchdog-rldcbk1r"                # set at first run via scripts/setup.sh; kept out of KB
+  # Reply-to-abort: watchdog subscribes to topic during grace windows
+  # and aborts the pending action if it receives a message starting with STOP.
+  reply_abort_enabled: true
+
+schedules:
+  daily_digest_utc: "15:00"     # 8am Pacific
+  weekly_roast_utc_day: "sunday"
+  weekly_roast_utc_time: "16:00"  # 9am Pacific
+
+paths:
+  heartbeat: /var/lib/hostinger-watchdog/heartbeat.json
+  cooldowns: /var/lib/hostinger-watchdog/cooldowns.json
+  sample_history: /var/lib/hostinger-watchdog/sample-history.json
+  events_log: /var/log/hostinger-watchdog/events.jsonl
